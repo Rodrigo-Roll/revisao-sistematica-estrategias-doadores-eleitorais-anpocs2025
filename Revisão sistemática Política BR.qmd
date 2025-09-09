@@ -1,0 +1,414 @@
+---
+title: "Revisão sistemática estratégia doadores eleitorais"
+date: "03/15/2025"
+author:
+  - name: Rodrigo Tamussino Roll
+    email: rodrigotamusroll@gmail.com
+abstract: > 
+  Códigos pertinentes à elaboração do artigo "INVESTIMENTO ELEITORAL: UMA REVISÃO SISTEMÁTICA DAS ESTRATÉGIAS DE DOADORES NO FINANCIAMENTO DE CAMPANHAS ELEITORAIS", a ser apresentado na ANPOCS 2025, e à dissertação a ser defendida no IESP/UERJ no mesmo ano.
+format:
+  pdf:
+    toc: false
+    number-sections: false
+    colorlinks: true
+    fig-pos: 'ht'
+    geometry:
+      - top=25mm
+      - left=20mm
+      - right=20mm
+      - bottom=25mm
+lang: pt
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+
+# Pacotes
+library(writexl)
+library(geobr)
+library(sf)
+library(modelsummary)
+library(gt)
+library(tidyverse)
+library(ggplot2)
+library(readr)
+library(readxl)
+library(haven)
+library(ggthemes)
+library(stringr)
+library(stringi)
+library(knitr)
+```
+
+
+# Importação das informações para montar base Catálogo de Teses e Dissertações da CAPES
+
+Carregando todas as planilhas ANO.csv e combinando-as em um único tibble contendo todas as teses e dissertações do período analisado e realizando as adaptações necessárias:
+
+```{r}
+
+# Carregando primeiro todas as planilhas ano.csv usando read_delim dentro de um loop
+
+# Verificando nomes dos arquivos dentro do diretório com list.files
+list.files("csvs")
+
+# Colocando todos em um vetor
+csvs_capes_separados <- c("csvs/capes_1987-1992.csv", "csvs/capes_1993-1998.csv",
+                    "csvs/capes_1999-2004.csv","csvs/capes_2005-2010.csv",
+                    "csvs/capes_2011-2016.csv", "csvs/capes_2017-2022.csv")
+
+# Criando um objeto em lista para fazer o loop
+csvs_capes_loop <- list()
+
+# Loop com o read_delim dentro para ler cada um dos arquivos
+for (i in csvs_capes_separados) {
+  csvs_capes_i <- read_delim(i, delim = ",")
+  csvs_capes_loop[[i]] <- csvs_capes_i
+}
+# Usando bind_rows para juntar tudo
+csvs_capes_loop <- bind_rows(csvs_capes_loop)
+
+# Juntando todos os capes.csvs baixados com o programas.csv para poder 
+# identificar programas, UFs e notas
+
+# Carregando progamas.csv com read_delim
+cd_programas <- read_delim("programas.csv", delim =",")
+
+# Juntando as bases com inner_join 
+
+capes_total <- inner_join(csvs_capes_loop, cd_programas,
+                            by = join_by(codigo_programa == CD_PROGRAMA))
+
+
+# Uniformizando caracteres em maiúsculo e sem acentuação
+
+
+# Lista de colunas com strings para uniformizar grafia
+colunas_para_converter <- c("nome_ies", "nome_programa", "grande_area",
+                            "area_conhecimento","area_avaliacao", "autor",
+                            "titulo", "nivel", "palavras_chave", "resumo")
+
+# Loop para aplicar iconv a cada coluna de string, usando touuper e passando
+# de UTF-8 para ASCII//TRANSLIT. Escolhi passar para 
+# maiúsculo para uniformizar todos os strings do documento (como as siglas
+# já estavam em maiúsculo, achei melhor assim).
+
+for (coluna in colunas_para_converter) {
+  capes_total[[coluna]] <- toupper (iconv(capes_total[[coluna]], 
+                                          from = "UTF-8", 
+                                          to = "ASCII//TRANSLIT"))
+}
+
+# Salvando o documento criado em uma única planilha csv
+write.csv(capes_total, "capes_nova.csv", row.names = FALSE)
+capes_nova <- read.csv("capes_nova.csv")
+
+
+# Filtrando observações da minha area de interesse
+
+# Primeiro, verificando quais são as variáveis dentro de area do conhecimento,
+# area de avaliacao e nome do programa - colunas que podem me ajudar a filtrar
+# pela area de interesse
+
+variaveis_area_conhecimento <- table(capes_nova$area_conhecimento)
+
+variaveis_area_avaliacao <- table(capes_nova$area_avaliacao)
+
+variaveis_nome_programa <- table(capes_nova$nome_programa)
+
+capes_CP <- filter(capes_nova, 
+                   str_detect(area_avaliacao,
+                              "CIENCIA POLITICA E RELACOES INTERNACIONAIS"))
+
+# Agora filtrando os programas com notas 4, 5, 6 e 7 e também os com nota "A",
+# uma vez que, nos termos da Portaria CAPES nº 68, de 3 de maio de 2021, o 
+# conceito "A" equivale à nota 5. O ideal era termos, também, os conceitos "B",
+# já que equivalem à nota 4, mas acho que ficaram de fora da programas.csv
+
+capes_CP_nota <- filter(capes_CP, CONCEITO %in% c("A","4","5","6","7"))
+
+```
+
+
+
+# Seleção de palavras-chave da base Catálogo de Teses e Dissertações da CAPES
+
+Filtrando a última base criada a partir das 3 palavras-chave mais pertinentes para o meu problema de pesquisa:
+
+```{r}
+
+palavra_chave1 <- toupper("financiamento de campanha|
+  financiamento eleitoral| 
+  financiadores de campanha|
+  financiamento empresarial|
+  doacao de campanha| 
+  doacao eleitoral|
+  doadores de campanha|
+  doacao empresarial|
+  doacoes empresariais|
+  doadores empresariais")
+
+palavra_chave2 <- toupper("investimento eleitoral|
+grupos de interesse|
+influencia|
+padrao|
+padroes|
+estrategia|
+comportamento|
+perfil|
+plutocracia|
+competicao|
+concorrencia|
+interesse|
+determinante")
+
+# Escolhi aplicar o filtro para palavras-chave, titulo e também resumo para
+# pegar o maior número possível
+
+capes_CP_nota_filtrado <- capes_CP_nota |>
+filter(
+  (str_detect(titulo, palavra_chave1) |
+     str_detect(titulo, palavra_chave2) |
+     str_detect(palavras_chave, palavra_chave1) |
+     str_detect(palavras_chave, palavra_chave2) |
+     str_detect(resumo, palavra_chave1) |
+     str_detect(resumo, palavra_chave2)))
+
+
+# Salvando o csv com os filtros aplicados
+write.csv2(capes_CP_nota_filtrado, 
+           "revisao_capes_polit_BR.csv", 
+           row.names = FALSE)
+revisao_capes_polit_BR <- read.csv2("revisao_capes_polit_BR.csv")
+
+```
+
+
+
+# Análise base final revisão sistemática
+
+Carregando a base elaborada com trabalhos levantados com este código e outras fontes (Scielo, Períodicos CAPES, mapeamentos anteriores e citações no Google Scholar):
+
+
+```{r}
+
+# Carregando a base
+
+base_final_politicabr <- 
+  read_xlsx("decomposicao_estudos_revisao_sistematica_politicabr.xlsx")
+
+
+```
+
+
+Analisando a dimensão formal:
+
+
+```{r}
+
+# Carregando a base
+
+base_final_politicabr <- 
+  read_xlsx("decomposicao_estudos_revisao_sistematica_politicabr.xlsx")
+
+# Contagem de trabalhos por fonte
+
+tabela_fontes <- base_final_politicabr %>%
+  count(Fonte, name = "Quantidade de Trabalhos") %>%
+  arrange(desc(`Quantidade de Trabalhos`))  
+
+print(tabela_fontes)
+
+# tabela_fontes %>% --> testar no knit
+ # kable()
+
+# Contagem de trabalhos por tipo
+
+tabela_tipo <- base_final_politicabr %>%
+  count(Tipo, name = "Quantidade de Trabalhos") %>%
+  arrange(desc(`Quantidade de Trabalhos`))  
+
+print(tabela_tipo)
+
+df_tipos <- base_final_politicabr %>%
+  count(`Tipo`, name = "quantidade_trabalhos") %>%
+  mutate(perc = quantidade_trabalhos / sum(quantidade_trabalhos) * 100)
+
+ggplot(df_tipos, aes(x = reorder(`Tipo`, -quantidade_trabalhos), 
+                     y = quantidade_trabalhos, 
+                     fill = `Tipo`)) +  
+  geom_col(fill = "#6495BF") +  
+  geom_text(aes(label = sprintf("%.1f%%", perc)), vjust = -0.5, size = 4) +  
+  labs(x = "", y = "", title = "Gráfico 1 - Distribuição de trabalhos por tipo") +  
+  scale_y_continuous(expand = expansion(mult = c(0, 0.2))) +  
+  theme_minimal()
+
+# Contagem de trabalhos por número de autores
+
+base_final_politicabr %>%
+  rowwise() %>%
+  mutate(num_autores = sum(c_across(starts_with("Autor")) != 
+                             "0" & !is.na(c_across(starts_with("Autor"))))) %>%
+  ungroup() %>%
+  mutate(
+    num_autores_agrupado = case_when(
+      num_autores == 1 ~ "Autoria única",
+      num_autores >= 2 ~ "Coautoria"
+    )
+  ) %>%
+  count(num_autores_agrupado, num_autores, 
+        name = "quantidade_trabalhos") %>%
+  ggplot(aes(x = num_autores_agrupado, 
+             y = quantidade_trabalhos, 
+             fill = factor(num_autores))) +
+  geom_bar(stat = "identity", position = "stack") +
+  scale_fill_brewer(palette = "Blues", name = "Número de Autores(as)") +
+  labs(x = "", y = "", 
+       title = "Gráfico 2 - Distribuição de trabalhos por quantidade de autores(as)
+       ") +
+  theme_minimal()
+
+# Contagem de trabalhos por autor 
+
+base_final_politicabr %>%
+  select(starts_with("Autor")) %>%
+  pivot_longer(cols = everything(), values_drop_na = TRUE) %>%
+  filter(value != "0") %>%  # Removendo "0"
+  count(value, name = "quantidade_trabalhos", sort = TRUE) %>%
+  filter(quantidade_trabalhos >= 2) %>%  # Filtrando apenas quem publicou 2x
+  ggplot(aes(x = reorder(value, quantidade_trabalhos), 
+             y = quantidade_trabalhos)) +
+  geom_col(fill = "#6495BF") +
+  coord_flip() +
+  labs(x = "", y = "
+       Quantidade de trabalhos", title = "Gráfico 3 - Autores(as) mais frequentes
+       ") +
+  scale_y_continuous(breaks = seq(0, 10, by = 1)) +
+  theme_minimal()
+
+# Contagem de trabalhos por ano de publicação
+
+## Criando uma sequência de anos desejados p/ facilitar visualização
+anos_desejados <- 2004:2024 
+
+base_final_politicabr %>%
+  count(Ano) %>%  
+  right_join(tibble(Ano = anos_desejados), by = "Ano") %>%  
+  replace_na(list(n = 0)) %>%  
+  # Substitui NA por 0, indicando que não houve trabalhos nesses anos
+  ggplot(aes(x = factor(Ano), y = n, group = 1)) +  
+  # Usa o ano para o eixo X, e a contagem no eixo Y
+  geom_line(color = "#6495BF", size = 1) +  
+  #Adiciona a linha com cor azul e tamanho de linha ajustado
+  geom_point(color = "#6495BF", size = 3) +  
+  #Adiciona os pontos no gráfico de linha para cada ano
+  labs(x = "", 
+       y = "", 
+       title = "Gráfico 3 - Quantidade de trabalhos por ano de publicação") + 
+  theme_minimal()  +
+  theme(axis.text.x = element_text(angle = 45))
+
+# Número de páginas
+
+mean(base_final_politicabr$`Nº de páginas`, na.rm = TRUE)
+sd(base_final_politicabr$`Nº de páginas`, na.rm = TRUE)
+
+
+# Idade dos casos
+
+mean(base_final_politicabr$`Idade do trabalho`, na.rm = TRUE)
+sd(base_final_politicabr$`Idade do trabalho`, na.rm = TRUE)
+
+```
+
+
+Analisando a dimensão metodológica:
+
+
+```{r}
+
+# Contagem de metodologias mais utilizadas
+
+## Criar a tabela de contagem primeiro
+df_metodologias <- base_final_politicabr %>%
+  select(starts_with("Metodologia")) %>%
+  pivot_longer(cols = everything(), values_drop_na = TRUE) %>%
+  filter(value != "0") %>%
+  count(value, name = "quantidade_trabalhos", sort = TRUE) %>%
+  mutate(perc = quantidade_trabalhos / sum(quantidade_trabalhos) * 100)
+
+## Criar o gráfico usando a tabela já processada
+ggplot(df_metodologias, aes(x = reorder(value, quantidade_trabalhos), 
+                            y = quantidade_trabalhos, 
+                            fill = quantidade_trabalhos)) +
+  geom_col(fill = "#6495BF") +
+  geom_text(aes(label = sprintf("%.1f%%", perc)), hjust = -0.2, size = 4) +  
+  coord_flip() +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.3))) +  
+  labs(x = "", y = "", title = "Gráfico 4 - Metodologias utilizadas") +
+  theme_minimal()
+
+# Trabalhos com causalidade
+
+tabela_causalidade <- base_final_politicabr %>%
+  count(Causalidade, name = "Quantidade de Trabalhos") 
+
+print(tabela_causalidade)
+
+
+# Contagem de trabalhos por cargo analisado
+
+base_final_politicabr %>%
+  filter(`Cargo(s) Analisado(s)` != "0") %>%
+  count(`Cargo(s) Analisado(s)`, 
+        name = "quantidade_trabalhos", sort = TRUE) %>%
+  ggplot(aes(x = reorder(`Cargo(s) Analisado(s)`, quantidade_trabalhos), 
+             y = quantidade_trabalhos, 
+             fill = quantidade_trabalhos)) +
+  geom_col(fill = "#6495BF") +
+  coord_flip() +
+  labs(x = "", y = "", title = "Cargos analisados") +
+  scale_y_continuous(breaks = seq(0, 20, by = 2)) +
+  theme_minimal()
+
+# Contagem de trabalhos por eleição
+
+base_final_politicabr %>%
+  separate_rows(`Ano eleições`, sep = ";") %>%
+  mutate(`Ano eleições` = str_trim(`Ano eleições`)) %>%
+  filter(`Ano eleições` != "0") %>%
+  count(`Ano eleições`, name = "quantidade_trabalhos", sort = TRUE) %>%
+  mutate(perc = quantidade_trabalhos / sum(quantidade_trabalhos) * 100) %>%
+  ggplot(aes(x = `Ano eleições`, y = quantidade_trabalhos, fill = quantidade_trabalhos)) +
+  geom_col(fill = "#6495BF") +
+  geom_text(aes(label = sprintf("%.1f%%", perc)), vjust = -0.5, size = 4) +  
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15))) + 
+  labs(x = "", y = "", title = "Gráfico 5 - Anos eleitorais analisados
+       ") +
+  theme_minimal()
+
+# Contagem de trabalhos por quantidade de eleiçoes analisadas
+
+base_final_politicabr %>%
+  mutate(`Ano eleições` = str_trim(`Ano eleições`)) %>%  
+  # Remove espaços extras
+  separate_rows(`Ano eleições`, sep = ";") %>%  
+  # Divide anos eleitorais em linhas separadas
+  group_by(id_estudo) %>%  
+  # Agrupa por ID do estudo (ou outra chave única)
+  summarise(num_eleicoes = n(), .groups = "drop") %>%  
+  # Conta quantos anos eleitorais cada trabalho analisou
+  count(num_eleicoes, name = "quantidade_trabalhos") %>%  
+  # Conta quantos trabalhos analisaram X eleições
+  ggplot(aes(x = factor(num_eleicoes), 
+             y = quantidade_trabalhos, 
+             fill = quantidade_trabalhos)) + 
+  geom_col(fill = "#6495BF") +
+  labs(x = "", y = "", 
+       title = "Gráfico 6 - Quantidade de eleições analisadas por trabalho
+       ") +
+  scale_y_continuous(breaks = seq(0, 20, by = 2)) +
+  theme_minimal()
+
+```
+
